@@ -1,0 +1,61 @@
+#!/bin/bash
+set -euo pipefail
+
+# Enable SSH on the live session for debug access.
+# Connect with: ssh -p 2222 user@localhost   (password: live)
+#               ssh -p 2222 root@localhost   (password: foundry)
+# Requires: boot with -netdev user,id=n0,hostfwd=tcp::2222-:22
+
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
+
+# Allow password auth and root login for debug convenience.
+# Only the live session is exposed; this config is not for production.
+cat > /etc/ssh/sshd_config.d/50-live-debug.conf <<'EOF'
+PasswordAuthentication yes
+PermitEmptyPasswords no
+PermitRootLogin yes
+UseDNS no
+EOF
+
+# Enable sshd so it starts with the live session.
+systemctl enable ssh.service
+
+# Set a known root password for live debug use.
+echo 'root:foundry' | chpasswd
+
+# The live user account ('user') is created at boot by casper's 25adduser with
+# password hash U6aMy0wojraho (= 'live').  SSH will accept that password once
+# the account exists — no pre-configuration needed here.
+
+# Ubuntu's NM package ships /usr/lib/NetworkManager/conf.d/10-globally-managed-devices.conf
+# which sets unmanaged-devices=*,except:type:wifi,except:type:gsm,except:type:cdma —
+# ethernet is explicitly excluded from management.  Override it from /etc/NetworkManager/conf.d/
+# (higher priority than /usr/lib/) to add ethernet to the managed set.
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/11-foundry-live-ethernet.conf <<'EOF'
+[keyfile]
+unmanaged-devices=*,except:type:wifi,except:type:gsm,except:type:cdma,except:type:ethernet
+EOF
+
+# Ensure all Ethernet interfaces get a DHCP lease automatically.
+# Without this, NetworkManager leaves interfaces like ens2 DOWN in QEMU and on
+# real hardware with unfamiliar NIC names, making SSH unreachable.
+mkdir -p /etc/NetworkManager/system-connections
+cat > /etc/NetworkManager/system-connections/live-ethernet.nmconnection <<'EOF'
+[connection]
+id=Live-Ethernet
+uuid=4a6b8c2d-1e3f-4a5b-9c0d-7e8f1a2b3c4d
+type=ethernet
+autoconnect=true
+autoconnect-priority=-100
+
+[ethernet]
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+addr-gen-mode=stable-privacy
+EOF
+chmod 600 /etc/NetworkManager/system-connections/live-ethernet.nmconnection

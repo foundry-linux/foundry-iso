@@ -12,7 +12,8 @@ EDITION="${EDITION:?EDITION env var required: anvil or atelier}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST_DIR="$(cd "$SCRIPT_DIR/../dist" && pwd)"
-ISO="$DIST_DIR/foundry-${EDITION}-1.0-amd64.iso"
+ISO_VERSION="$(cat "$SCRIPT_DIR/../VERSION")"
+ISO="$DIST_DIR/foundry-${EDITION}-${ISO_VERSION}-amd64.iso"
 
 if [[ ! -f "$ISO" ]]; then
   echo "ERROR: $ISO not found — run build-iso.sh first" >&2
@@ -34,11 +35,26 @@ sha256sum "$ISO" > "${ISO}.sha256"
 cat "${ISO}.sha256"
 
 echo "=== GPG sign ==="
+rm -f "${ISO}.asc"
 if [[ ${#PASSPHRASE_ARGS[@]} -gt 0 ]]; then
   echo "$GPG_PASSPHRASE" | gpg --batch "${PASSPHRASE_ARGS[@]}" \
       --armor --detach-sign --output "${ISO}.asc" "$ISO"
 else
-  gpg --armor --detach-sign --output "${ISO}.asc" "$ISO"
+  gpg --batch --no-tty --pinentry-mode loopback \
+      --armor --detach-sign --output "${ISO}.asc" "$ISO" < /dev/null
+fi
+
+echo "=== Creating torrent ==="
+TORRENT_URL=""
+INFOHASH=""
+MAGNET_LINK=""
+if command -v mktorrent &>/dev/null; then
+  EDITION="$EDITION" bash "$SCRIPT_DIR/create-torrents.sh"
+  INFOHASH=$(cat "${ISO}.infohash" 2>/dev/null || true)
+  MAGNET_LINK=$(cat "${ISO}.magnet" 2>/dev/null || true)
+  TORRENT_URL="https://iso.foundrylinux.org/foundry-${EDITION}-latest-amd64.iso.torrent"
+else
+  echo "  mktorrent not found — skipping torrent creation"
 fi
 
 echo "=== Writing manifest ==="
@@ -47,12 +63,15 @@ SHA=$(awk '{print $1}' "${ISO}.sha256")
 SIZE=$(stat -c %s "$ISO")
 cat > "$MANIFEST" <<EOF
 {
-  "edition":    "${EDITION}",
-  "version":    "1.0",
-  "filename":   "foundry-${EDITION}-1.0-amd64.iso",
-  "sha256":     "${SHA}",
-  "size_bytes": ${SIZE},
-  "download":   "https://iso.foundrylinux.org/foundry-${EDITION}-latest-amd64.iso"
+  "edition":      "${EDITION}",
+  "version":      "${ISO_VERSION}",
+  "filename":     "foundry-${EDITION}-${ISO_VERSION}-amd64.iso",
+  "sha256":       "${SHA}",
+  "size_bytes":   ${SIZE},
+  "download":     "https://iso.foundrylinux.org/foundry-${EDITION}-latest-amd64.iso",
+  "torrent_url":  "${TORRENT_URL}",
+  "infohash":     "${INFOHASH}",
+  "magnet_link":  "${MAGNET_LINK}"
 }
 EOF
 
